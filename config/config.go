@@ -94,6 +94,7 @@ type configFile struct {
 }
 
 type keyGroup struct {
+	Merge   []keyGroup
 	KMS     []kmsKey
 	GCPKMS  []gcpKmsKey  `yaml:"gcp_kms"`
 	AzureKV []azureKVKey `yaml:"azure_keyvault"`
@@ -180,38 +181,54 @@ type Config struct {
 	OmitExtensions    bool
 }
 
+func extractMasterKeys(group keyGroup) (sops.KeyGroup, error) {
+	var keyGroup sops.KeyGroup
+	for _, k := range group.Merge {
+		subKeyGroup, err := extractMasterKeys(k)
+		if err != nil {
+			return nil, err
+		}
+		keyGroup = append(keyGroup, subKeyGroup...)
+	}
+
+	for _, k := range group.Age {
+		keys, err := age.MasterKeysFromRecipients(k)
+		if err != nil {
+			return nil, err
+		}
+		for _, key := range keys {
+			keyGroup = append(keyGroup, key)
+		}
+	}
+	for _, k := range group.PGP {
+		keyGroup = append(keyGroup, pgp.NewMasterKeyFromFingerprint(k))
+	}
+	for _, k := range group.KMS {
+		keyGroup = append(keyGroup, kms.NewMasterKeyWithProfile(k.Arn, k.Role, k.Context, k.AwsProfile))
+	}
+	for _, k := range group.GCPKMS {
+		keyGroup = append(keyGroup, gcpkms.NewMasterKeyFromResourceID(k.ResourceID))
+	}
+	for _, k := range group.AzureKV {
+		keyGroup = append(keyGroup, azkv.NewMasterKey(k.VaultURL, k.Key, k.Version))
+	}
+	for _, k := range group.Vault {
+		if masterKey, err := hcvault.NewMasterKeyFromURI(k); err == nil {
+			keyGroup = append(keyGroup, masterKey)
+		} else {
+			return nil, err
+		}
+	}
+	return keyGroup, nil
+}
+
 func getKeyGroupsFromCreationRule(cRule *creationRule, kmsEncryptionContext map[string]*string) ([]sops.KeyGroup, error) {
 	var groups []sops.KeyGroup
 	if len(cRule.KeyGroups) > 0 {
 		for _, group := range cRule.KeyGroups {
-			var keyGroup sops.KeyGroup
-			for _, k := range group.Age {
-				keys, err := age.MasterKeysFromRecipients(k)
-				if err != nil {
-					return nil, err
-				}
-				for _, key := range keys {
-					keyGroup = append(keyGroup, key)
-				}
-			}
-			for _, k := range group.PGP {
-				keyGroup = append(keyGroup, pgp.NewMasterKeyFromFingerprint(k))
-			}
-			for _, k := range group.KMS {
-				keyGroup = append(keyGroup, kms.NewMasterKeyWithProfile(k.Arn, k.Role, k.Context, k.AwsProfile))
-			}
-			for _, k := range group.GCPKMS {
-				keyGroup = append(keyGroup, gcpkms.NewMasterKeyFromResourceID(k.ResourceID))
-			}
-			for _, k := range group.AzureKV {
-				keyGroup = append(keyGroup, azkv.NewMasterKey(k.VaultURL, k.Key, k.Version))
-			}
-			for _, k := range group.Vault {
-				if masterKey, err := hcvault.NewMasterKeyFromURI(k); err == nil {
-					keyGroup = append(keyGroup, masterKey)
-				} else {
-					return nil, err
-				}
+			keyGroup, err := extractMasterKeys(group)
+			if err != nil {
+				return nil, err
 			}
 			groups = append(groups, keyGroup)
 		}

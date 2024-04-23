@@ -120,6 +120,40 @@ creation_rules:
       - 'https://baz.vault:8200/v1/baz/keys/baz-key'
 `)
 
+var sampleConfigWithMergeType = []byte(`
+creation_rules:
+  - path_regex: ""
+    key_groups:
+    - merge:
+      - kms:
+        - arn: foo
+          aws_profile: bar
+        pgp:
+        - bar
+        gcp_kms:
+        - resource_id: foo
+        azure_keyvault:
+        - vaultUrl: https://foo.vault.azure.net
+          key: foo-key
+          version: fooversion
+        hc_vault:
+        - 'https://foo.vault:8200/v1/foo/keys/foo-key'
+      - kms:
+        - arn: baz
+          aws_profile: foo
+        pgp:
+        - qux
+        gcp_kms:
+        - resource_id: bar
+        - resource_id: baz
+        azure_keyvault:
+        - vaultUrl: https://bar.vault.azure.net
+          key: bar-key
+          version: barversion
+        hc_vault:
+        - 'https://baz.vault:8200/v1/baz/keys/baz-key'
+`)
+
 var sampleConfigWithSuffixParameters = []byte(`
 creation_rules:
   - path_regex: foobar*
@@ -322,6 +356,12 @@ func TestLoadConfigFileWithGroups(t *testing.T) {
 	err := conf.load(sampleConfigWithGroups)
 	assert.Nil(t, err)
 	assert.Equal(t, expected, conf)
+}
+
+func TestLoadConfigFileWithMerge(t *testing.T) {
+	conf, err := parseCreationRuleForFile(parseConfigFile(sampleConfigWithMergeType, t), "/conf/path", "whatever", nil)
+	assert.Nil(t, err)
+	assert.Equal(t, 11, len(conf.KeyGroups[0]))
 }
 
 func TestLoadConfigFileWithNoMatchingRules(t *testing.T) {
